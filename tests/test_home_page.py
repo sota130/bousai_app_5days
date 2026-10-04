@@ -108,14 +108,22 @@ class HomePageTests(unittest.TestCase):
                     data={
                         "action": "register",
                         "name": "青森市民センター",
+                        "address": "青森県青森市中央1丁目",
                         "status": "開設中",
+                        "capacity": "300",
+                        "disaster_types": ["地震", "津波"],
+                        "facilities": ["ペット可", "バリアフリー"],
                         "latitude": "40.8244",
                         "longitude": "140.7400",
                     },
                 )
 
             self.assertEqual(response.status_code, 200)
+            self.assertEqual(shelters[0]["address"], "青森県青森市中央1丁目")
             self.assertEqual(shelters[0]["status"], "開設中")
+            self.assertEqual(shelters[0]["capacity"], 300)
+            self.assertEqual(shelters[0]["disaster_types"], ["地震", "津波"])
+            self.assertEqual(shelters[0]["facilities"], ["ペット可", "バリアフリー"])
             self.assertEqual(shelters[0]["latitude"], 40.8244)
             self.assertEqual(shelters[0]["longitude"], 140.74)
             self.assertEqual(json.loads(data_file.read_text(encoding="utf-8")), shelters)
@@ -130,6 +138,7 @@ class HomePageTests(unittest.TestCase):
                 data={
                     "action": "register",
                     "name": "青森市民センター",
+                    "address": "青森県青森市中央1丁目",
                     "status": "開設中",
                     "latitude": "40.8244",
                     "longitude": "",
@@ -154,7 +163,12 @@ class HomePageTests(unittest.TestCase):
                     data={
                         "action": "update_status",
                         "shelter_id": "1",
+                        "name": "市民体育館",
+                        "address": "青森県青森市",
                         "status": "開設中",
+                        "capacity": "120",
+                        "disaster_types": ["地震"],
+                        "facilities": ["ペット可"],
                         "latitude": "40.8",
                         "longitude": "140.7",
                     },
@@ -162,9 +176,59 @@ class HomePageTests(unittest.TestCase):
 
             self.assertEqual(response.status_code, 200)
             self.assertEqual(shelters[0]["status"], "開設中")
+            self.assertEqual(shelters[0]["address"], "青森県青森市")
+            self.assertEqual(shelters[0]["capacity"], 120)
             self.assertEqual(shelters[0]["latitude"], 40.8)
             self.assertEqual(shelters[0]["longitude"], 140.7)
             self.assertEqual(json.loads(data_file.read_text(encoding="utf-8")), shelters)
+
+    def test_geocoding_api_returns_location_candidates(self):
+        candidates = [{
+            "label": "青森県青森市中央一丁目",
+            "latitude": 40.8244,
+            "longitude": 140.74,
+        }]
+        with patch("app.geocode_address", return_value=candidates):
+            client = app.test_client()
+            with client.session_transaction() as session:
+                session["logged_in"] = True
+            response = client.get(
+                "/api/geocode",
+                query_string={"address": "青森県青森市"}
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json(), {"candidates": candidates})
+
+    def test_geocoding_api_reports_unmatched_address(self):
+        with patch("app.geocode_address", return_value=[]):
+            client = app.test_client()
+            with client.session_transaction() as session:
+                session["logged_in"] = True
+            response = client.get("/api/geocode?address=住所のない場所")
+
+        self.assertEqual(response.status_code, 404)
+        self.assertIn("見つかりません", response.get_json()["error"])
+
+    def test_shelter_detail_listing_includes_new_fields(self):
+        shelters = [{
+            "id": 10,
+            "name": "青森市民センター",
+            "address": "青森県青森市中央1丁目",
+            "capacity": 300,
+            "status": "開設中",
+            "disaster_types": ["地震", "津波"],
+            "facilities": ["ペット可"],
+        }]
+        with patch.object(application, "shelters", shelters):
+            response = app.test_client().get("/all_shelters")
+
+        self.assertEqual(response.status_code, 200)
+        page = response.get_data(as_text=True)
+        self.assertIn("青森県青森市中央1丁目", page)
+        self.assertIn("300人", page)
+        self.assertIn("地震、津波", page)
+        self.assertIn("ペット可", page)
 
     def test_resident_instruction_registration_is_reflected_as_urgent_home_information(self):
         instructions = []

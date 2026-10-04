@@ -4,14 +4,41 @@
 <h2>検索結果</h2>
 
 {% if results %}
-  <ul>
+  <div class="shelter-results">
     {% for shelter in results %}
-    <li>{{ shelter.name }}</li>
+      <article class="shelter-result">
+        <h3>{{ shelter.name }}</h3>
+        <dl>
+          <div><dt>住所</dt><dd>{{ shelter.address|default('未登録') }}</dd></div>
+          <div><dt>開設状況</dt><dd>{{ shelter.status|default('状況未登録') }}</dd></div>
+          <div><dt>収容人数</dt><dd>{% if shelter.capacity %}{{ shelter.capacity }}人{% else %}未登録{% endif %}</dd></div>
+          <div><dt>対応できる災害</dt><dd>{% if shelter.disaster_types %}{{ shelter.disaster_types|join('、') }}{% else %}未登録{% endif %}</dd></div>
+          <div><dt>設備・受け入れ条件</dt><dd>{% if shelter.facilities %}{{ shelter.facilities|join('、') }}{% else %}未登録{% endif %}</dd></div>
+        </dl>
+      </article>
     {% endfor %}
-  </ul>
+  </div>
 {% else %}
   <p>該当する避難所が見つかりませんでした</p>
 {% endif %}
+
+<style>
+  .shelter-results { display: grid; gap: 14px; }
+  .shelter-result {
+    padding: 18px;
+    border: 1px solid #dfe7ee;
+    border-radius: 14px;
+    background: #fff;
+  }
+  .shelter-result h3 { margin: 0 0 12px; color: #18324b; }
+  .shelter-result dl { display: grid; gap: 8px; margin: 0; }
+  .shelter-result dl > div { display: grid; grid-template-columns: minmax(150px, 0.35fr) 1fr; gap: 12px; }
+  .shelter-result dt { color: #64798b; font-weight: 700; }
+  .shelter-result dd { margin: 0; }
+  @media (max-width: 520px) {
+    .shelter-result dl > div { grid-template-columns: 1fr; gap: 2px; }
+  }
+</style>
 
 <p>
   <a href="/shelter_search">検索画面に戻る</a> |

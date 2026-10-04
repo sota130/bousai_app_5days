@@ -6,7 +6,7 @@
 {% set form_data = form_data|default({}) %}
 <style>
   .shelter-admin {
-    max-width: 760px;
+    max-width: 900px;
     margin: 0 auto;
   }
 
@@ -33,7 +33,9 @@
 
   .shelter-form input,
   .shelter-form select,
+  .status-form input,
   .status-form select {
+    width: 100%;
     min-height: 42px;
     padding: 8px 10px;
     border: 1px solid #bfccd6;
@@ -41,42 +43,66 @@
     font: inherit;
   }
 
-  .shelter-form input { width: 100%; }
-  .shelter-form select,
-  .status-form select { width: 100%; }
-
   .registration-fields {
     display: grid;
     grid-template-columns: minmax(0, 1.3fr) minmax(180px, 0.7fr);
     gap: 16px;
   }
 
-  .coordinate-fields {
+  .coordinate-fields,
+  .status-coordinates {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 12px;
+    gap: 10px;
   }
 
   .form-field { margin: 16px 0; }
   .registration-fields .form-field { min-width: 0; }
 
-  .form-help {
+  .form-help,
+  .geocode-status,
+  .selected-location {
     margin: 6px 0 0;
     color: #64798b;
     font-size: 0.84rem;
     line-height: 1.6;
   }
 
+  .geocode-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: end;
+    gap: 10px;
+  }
+
+  .geocode-row .form-field { min-width: 0; }
+
+  .secondary-button,
   .primary-button {
     min-height: 42px;
-    padding: 9px 18px;
+    padding: 9px 16px;
     border: 0;
     border-radius: 9px;
-    background: #1267a8;
-    color: #fff;
     font: inherit;
     font-weight: 700;
     cursor: pointer;
+  }
+
+  .secondary-button {
+    border: 1px solid #c8dbe9;
+    background: #eef7ff;
+    color: #07599a;
+  }
+
+  .primary-button {
+    background: #1267a8;
+    color: #fff;
+  }
+
+  .secondary-button:disabled,
+  .primary-button:disabled {
+    cursor: wait;
+    opacity: 0.65;
   }
 
   .feedback {
@@ -88,16 +114,52 @@
   .feedback.success { background: #eaf9f0; color: #21643e; }
   .feedback.error { background: #fff0ed; color: #8f321c; }
 
+  .option-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 8px;
+    margin: 10px 0 0;
+  }
+
+  .option-choice {
+    display: flex !important;
+    min-height: 42px;
+    align-items: center;
+    gap: 8px;
+    margin: 0 !important;
+    padding: 8px 10px;
+    border: 1px solid #dfe7ee;
+    border-radius: 9px;
+    background: #f8fafc;
+    font-weight: 500 !important;
+  }
+
+  .option-choice input {
+    width: 18px !important;
+    min-height: 18px !important;
+    margin: 0;
+    accent-color: #1267a8;
+  }
+
   .shelter-row {
     display: grid;
     grid-template-columns: minmax(0, 1fr);
     gap: 10px;
-    padding: 18px 0;
-    border-bottom: 1px solid #e1e9ef;
+    margin-top: 14px;
+    padding: 18px;
+    border: 1px solid #d5e0e8;
+    border-left: 5px solid #1267a8;
+    border-radius: 12px;
+    background: #f8fbfd;
+    box-shadow: 0 3px 10px rgba(24, 52, 74, 0.05);
   }
 
-  .shelter-row:last-child { border-bottom: 0; }
-  .shelter-name { margin: 0; font-weight: 700; }
+  .shelter-name {
+    margin: 0;
+    color: #18324b;
+    font-size: 1.05rem;
+    font-weight: 700;
+  }
   .shelter-location {
     margin: 4px 0 0;
     color: #64798b;
@@ -105,39 +167,31 @@
   }
 
   .status-form {
+    display: grid;
     grid-template-columns: minmax(130px, 0.65fr) minmax(220px, 1.35fr) auto;
     align-items: end;
     gap: 12px;
   }
 
-  .status-form > div:first-of-type,
-  .status-coordinates,
-  .status-form .primary-button {
-    min-width: 0;
-  }
-
-  .status-coordinates {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 10px;
-  }
-
-  .status-coordinates input { width: 100%; min-width: 0; }
-
+  .status-form > div,
+  .status-form .primary-button { min-width: 0; }
+  .status-coordinates input { min-width: 0; }
   .status-form .primary-button { justify-self: start; }
 
-  @media (max-width: 560px) {
+  @media (max-width: 620px) {
     .shelter-form,
     .shelter-status-list { padding: 16px; }
     .registration-fields,
     .status-form { grid-template-columns: minmax(0, 1fr); }
+    .geocode-row { grid-template-columns: minmax(0, 1fr); }
+    .geocode-row .secondary-button,
     .status-form .primary-button { width: 100%; }
   }
 </style>
 
 <div class="shelter-admin">
   <h2>避難所登録・開設状況</h2>
-  <p>避難所の名称、地図上の位置、現在の開設状況を登録・更新できます。</p>
+  <p>施設の基本情報、対応災害、設備、開設状況を登録できます。</p>
 
   {% if success %}
     <p class="feedback success" role="status">{{ message }}</p>
@@ -146,7 +200,7 @@
     <p class="feedback error" role="alert">{{ message }}</p>
   {% endif %}
 
-  <form class="shelter-form" method="post">
+  <form class="shelter-form shelter-location-form" method="post">
     <input type="hidden" name="action" value="register">
     <div class="registration-fields">
       <div class="form-field">
@@ -162,62 +216,217 @@
         </select>
       </div>
     </div>
-    <div class="coordinate-fields">
+
+    <div class="geocode-row">
       <div class="form-field">
-        <label for="latitude">緯度（任意）</label>
-        <input type="number" id="latitude" name="latitude" min="-90" max="90" step="any" value="{{ form_data.get('latitude', '') }}" placeholder="例：40.8244">
+        <label for="address">住所（必須）</label>
+        <input class="address-input" type="text" id="address" name="address" value="{{ form_data.get('address', '') }}" autocomplete="street-address" required>
       </div>
-      <div class="form-field">
-        <label for="longitude">経度（任意）</label>
-        <input type="number" id="longitude" name="longitude" min="-180" max="180" step="any" value="{{ form_data.get('longitude', '') }}" placeholder="例：140.7400">
-      </div>
+      <button class="secondary-button geocode-button" type="button">住所から位置を検索</button>
     </div>
-    <p class="form-help">地図に避難所を表示するには、正確な緯度・経度を両方入力してください。未入力の場合、地図にピンは表示されません。</p>
+    <p class="form-help">住所を入力して検索し、表示された候補から正しい場所を選択してください。住所検索にはOpenStreetMap Nominatimを利用します。</p>
+    <div class="geocode-results" aria-live="polite"></div>
+    <p class="selected-location" aria-live="polite">地図位置：未選択</p>
+    <input class="latitude-input" type="hidden" name="latitude" value="{{ form_data.get('latitude', '') }}">
+    <input class="longitude-input" type="hidden" name="longitude" value="{{ form_data.get('longitude', '') }}">
+
+    <div class="form-field">
+      <label for="capacity">収容人数（人）</label>
+      <input type="number" id="capacity" name="capacity" min="1" step="1" value="{{ form_data.get('capacity', '') }}" placeholder="例：300">
+    </div>
+
+    <fieldset class="form-field">
+      <legend>対応できる災害</legend>
+      <div class="option-grid">
+        {% for disaster in disaster_types %}
+          <label class="option-choice">
+            <input type="checkbox" name="disaster_types" value="{{ disaster }}" {% if disaster in form_data.getlist('disaster_types') %}checked{% endif %}>
+            {{ disaster }}
+          </label>
+        {% endfor %}
+      </div>
+    </fieldset>
+
+    <fieldset class="form-field">
+      <legend>設備・受け入れ条件</legend>
+      <div class="option-grid">
+        {% for facility in shelter_facilities %}
+          <label class="option-choice">
+            <input type="checkbox" name="facilities" value="{{ facility }}" {% if facility in form_data.getlist('facilities') %}checked{% endif %}>
+            {{ facility }}
+          </label>
+        {% endfor %}
+      </div>
+    </fieldset>
+
     <p><button class="primary-button" type="submit">避難所を登録</button></p>
   </form>
 
   <section class="shelter-status-list" aria-labelledby="shelter-status-title">
-    <h3 id="shelter-status-title">登録済み避難所の開設状況</h3>
-    <p class="form-help">開設状況と正確な位置を設定すると、ホーム画面の避難所マップに反映されます。位置情報が未登録の場合は、緯度・経度を両方入力してください。</p>
+    <h3 id="shelter-status-title">登録済み避難所</h3>
+    <p class="form-help">施設情報・対応災害・設備・開設状況を編集できます。</p>
     {% if shelters %}
       {% for shelter in shelters %}
-        <div class="shelter-row">
+        <article class="shelter-row">
           <div>
             <p class="shelter-name">{{ shelter.name }}</p>
-            {% if shelter.latitude is defined and shelter.longitude is defined %}
-              <p class="shelter-location">位置情報登録済み</p>
-            {% else %}
-              <p class="shelter-location">位置情報未登録</p>
-            {% endif %}
+            <p class="shelter-location">{{ shelter.address|default('住所未登録') }} ／ 収容人数：{% if shelter.capacity %}{{ shelter.capacity }}人{% else %}未登録{% endif %}</p>
           </div>
-          <form class="status-form" method="post">
+          <form class="status-form shelter-location-form" method="post">
             <input type="hidden" name="action" value="update_status">
             <input type="hidden" name="shelter_id" value="{{ shelter.id }}">
             <div>
-              <label for="status-{{ shelter.id }}">開設状況</label>
-              <select id="status-{{ shelter.id }}" name="status">
+              <label for="edit-name-{{ shelter.id }}">避難所名</label>
+              <input type="text" id="edit-name-{{ shelter.id }}" name="name" value="{{ shelter.name }}" required>
+            </div>
+            <div>
+              <label for="edit-address-{{ shelter.id }}">住所</label>
+              <input class="address-input" type="text" id="edit-address-{{ shelter.id }}" name="address" value="{{ shelter.address|default('') }}" autocomplete="street-address">
+              <button class="secondary-button geocode-button" type="button">住所から位置を検索</button>
+              <div class="geocode-results" aria-live="polite"></div>
+              <p class="selected-location" aria-live="polite">{% if shelter.latitude is defined and shelter.longitude is defined %}登録済み位置：{{ shelter.latitude }}, {{ shelter.longitude }}{% else %}地図位置：未選択{% endif %}</p>
+            </div>
+            <div>
+              <label for="edit-capacity-{{ shelter.id }}">収容人数（人）</label>
+              <input type="number" id="edit-capacity-{{ shelter.id }}" name="capacity" min="1" step="1" value="{{ shelter.capacity|default('') }}">
+            </div>
+            <div>
+              <label for="edit-status-{{ shelter.id }}">開設状況</label>
+              <select id="edit-status-{{ shelter.id }}" name="status">
                 {% for status in statuses %}
                   <option value="{{ status }}" {% if shelter.status|default('状況未登録') == status %}selected{% endif %}>{{ status }}</option>
                 {% endfor %}
               </select>
             </div>
-            <div class="status-coordinates">
-              <div>
-                <label for="latitude-{{ shelter.id }}">緯度</label>
-                <input type="number" id="latitude-{{ shelter.id }}" name="latitude" min="-90" max="90" step="any" value="{{ shelter.latitude|default('') }}">
+            <fieldset class="form-field">
+              <legend>対応できる災害</legend>
+              <div class="option-grid">
+                {% for disaster in disaster_types %}
+                  <label class="option-choice">
+                    <input type="checkbox" name="disaster_types" value="{{ disaster }}" {% if disaster in shelter.disaster_types|default([]) %}checked{% endif %}>
+                    {{ disaster }}
+                  </label>
+                {% endfor %}
               </div>
-              <div>
-                <label for="longitude-{{ shelter.id }}">経度</label>
-                <input type="number" id="longitude-{{ shelter.id }}" name="longitude" min="-180" max="180" step="any" value="{{ shelter.longitude|default('') }}">
+            </fieldset>
+            <fieldset class="form-field">
+              <legend>設備・受け入れ条件</legend>
+              <div class="option-grid">
+                {% for facility in shelter_facilities %}
+                  <label class="option-choice">
+                    <input type="checkbox" name="facilities" value="{{ facility }}" {% if facility in shelter.facilities|default([]) %}checked{% endif %}>
+                    {{ facility }}
+                  </label>
+                {% endfor %}
               </div>
-            </div>
-            <button class="primary-button" type="submit">状況・位置を更新</button>
+            </fieldset>
+            <input class="latitude-input" type="hidden" name="latitude" value="{{ shelter.latitude|default('') }}">
+            <input class="longitude-input" type="hidden" name="longitude" value="{{ shelter.longitude|default('') }}">
+            <button class="primary-button" type="submit">施設情報を更新</button>
           </form>
-        </div>
+        </article>
       {% endfor %}
     {% else %}
       <p class="form-help">登録済み避難所はありません。</p>
     {% endif %}
   </section>
 </div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+  document.querySelectorAll('.shelter-location-form').forEach(function (form) {
+    const addressInput = form.querySelector('.address-input');
+    const searchButton = form.querySelector('.geocode-button');
+    const candidatesContainer = form.querySelector('.geocode-results');
+    const latitudeInput = form.querySelector('.latitude-input');
+    const longitudeInput = form.querySelector('.longitude-input');
+    const locationStatus = form.querySelector('.selected-location');
+    let resolvedAddress = addressInput.value.trim();
+
+    addressInput.addEventListener('input', function () {
+      if (addressInput.value.trim() !== resolvedAddress) {
+        latitudeInput.value = '';
+        longitudeInput.value = '';
+        candidatesContainer.replaceChildren();
+        locationStatus.textContent = '住所が変更されました。新しい場所を検索してください。';
+        resolvedAddress = '';
+      }
+    });
+
+    searchButton.addEventListener('click', function () {
+      const address = addressInput.value.trim();
+      if (address.length < 3) {
+        locationStatus.textContent = '住所を3文字以上入力してください。';
+        addressInput.focus();
+        return;
+      }
+
+      searchButton.disabled = true;
+      searchButton.textContent = '検索中…';
+      candidatesContainer.replaceChildren();
+      locationStatus.textContent = '住所から場所を検索しています…';
+
+      fetch('{{ url_for("api_geocode") }}?address=' + encodeURIComponent(address))
+        .then(function (response) {
+          return response.json().then(function (data) {
+            if (!response.ok) throw new Error(data.error || '住所検索に失敗しました。');
+            return data;
+          });
+        })
+        .then(function (data) {
+          const candidates = Array.isArray(data.candidates) ? data.candidates : [];
+          if (!candidates.length) throw new Error('住所に一致する場所が見つかりません。');
+          const label = document.createElement('label');
+          label.className = 'form-help';
+          label.textContent = '地図上の場所を確認して選択してください。';
+          const select = document.createElement('select');
+          select.className = 'candidate-select';
+          select.required = true;
+          const placeholder = document.createElement('option');
+          placeholder.value = '';
+          placeholder.textContent = '候補を選択してください';
+          select.append(placeholder);
+          candidates.forEach(function (candidate, index) {
+            const option = document.createElement('option');
+            option.value = String(index);
+            option.textContent = candidate.label;
+            select.append(option);
+          });
+          label.append(select);
+          candidatesContainer.append(label);
+
+          select.addEventListener('change', function () {
+            const candidate = candidates[Number(select.value)];
+            if (!candidate) {
+              latitudeInput.value = '';
+              longitudeInput.value = '';
+              locationStatus.textContent = '地図位置：未選択';
+              return;
+            }
+            latitudeInput.value = candidate.latitude;
+            longitudeInput.value = candidate.longitude;
+            resolvedAddress = address;
+            locationStatus.textContent = '選択した位置：' + candidate.label;
+          });
+          locationStatus.textContent = candidates.length + '件の候補が見つかりました。正しい場所を選択してください。';
+        })
+        .catch(function (error) {
+          locationStatus.textContent = error.message;
+        })
+        .finally(function () {
+          searchButton.disabled = false;
+          searchButton.textContent = '住所から位置を検索';
+        });
+    });
+
+    form.addEventListener('submit', function (event) {
+      if (!latitudeInput.value || !longitudeInput.value || resolvedAddress !== addressInput.value.trim()) {
+        event.preventDefault();
+        locationStatus.textContent = '登録前に住所を検索し、正しい候補を選択してください。';
+        searchButton.focus();
+      }
+    });
+  });
+});
+</script>
 {% endblock %}

@@ -1,9 +1,11 @@
 from flask import Flask, jsonify, request, render_template, session, redirect, url_for
-from urllib.parse import urlparse, urljoin
-from functools import wraps
+from urllib.parse import urlparse, urljoin, urlencode
+from functools import lru_cache, wraps
 import json
 import math
 import os
+import threading
+import time
 import urllib.request
 from datetime import datetime, timedelta, timezone
 
@@ -38,6 +40,11 @@ WARNING_URL = (
 
 JST = timezone(timedelta(hours=9))
 SHELTER_STATUSES = ("開設中", "開設前", "閉鎖", "状況未登録")
+DISASTER_TYPES = ("地震", "津波", "洪水", "土砂災害", "高潮", "火災", "大雪")
+SHELTER_FACILITIES = ("ペット可", "バリアフリー", "非常用電源", "備蓄あり", "授乳室")
+GEOCODING_URL = "https://nominatim.openstreetmap.org/search"
+_geocoding_lock = threading.Lock()
+_last_geocoding_request = 0.0
 
 # 警報・注意報のコード一覧
 WARNING_CODES = {
@@ -95,6 +102,118 @@ def load_json(path, default):
 
 shelters = load_json(DATA_FILE, [])
 instructions = load_json(INSTRUCTIONS_FILE, [])
+
+
+@lru_cache(maxsize=256)
+def geocode_address(address):
+    """Nominatimで住所を検索し、利用者が選べる候補を返す"""
+    global _last_geocoding_request
+    with _geocoding_lock:
+        elapsed = time.monotonic() - _last_geocoding_request
+        if elapsed < 1:
+            time.sleep(1 - elapsed)
+        query = urlencode({
+            "q": address,
+            "format": "jsonv2",
+            "limit": 5,
+            "countrycodes": "jp",
+            "accept-language": "ja"
+        })
+        req = urllib.request.Request(
+            f"{GEOCODING_URL}?{query}",
+            headers={"User-Agent": "BousaiApp/1.0 (shelter address lookup)"}
+        )
+        _last_geocoding_request = time.monotonic()
+        with urllib.request.urlopen(req, timeout=10) as response:
+            result = json.loads(response.read())
+
+    if not isinstance(result, list):
+        raise ValueError("住所検索サービスの応答形式が不正です")
+
+    candidates = []
+    for item in result:
+        if not isinstance(item, dict):
+            continue
+        try:
+            latitude = float(item["lat"])
+            longitude = float(item["lon"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if (
+            not math.isfinite(latitude)
+            or not math.isfinite(longitude)
+            or not -90 <= latitude <= 90
+            or not -180 <= longitude <= 180
+        ):
+            continue
+        candidates.append({
+            "label": item.get("display_name", address),
+            "latitude": latitude,
+            "longitude": longitude
+        })
+    return candidates
+
+
+def parse_shelter_details(form, require_coordinates=False, require_address=True):
+    """避難所の住所・収容人数・対応災害・設備と座標を検証する"""
+    name = form.get('name', '').strip()
+    address = form.get('address', '').strip()
+    capacity_text = form.get('capacity', '').strip()
+    if not name:
+        raise ValueError('避難所名を入力してください。')
+    if require_address and not address:
+        raise ValueError('住所を入力してください。')
+
+    capacity = None
+    if capacity_text:
+        try:
+            capacity = int(capacity_text)
+        except ValueError as error:
+            raise ValueError('収容人数は1以上の整数で入力してください。') from error
+        if capacity < 1:
+            raise ValueError('収容人数は1以上の整数で入力してください。')
+
+    disaster_types = form.getlist('disaster_types')
+    facilities = form.getlist('facilities')
+    if any(value not in DISASTER_TYPES for value in disaster_types):
+        raise ValueError('対応災害の選択内容が正しくありません。')
+    if any(value not in SHELTER_FACILITIES for value in facilities):
+        raise ValueError('設備の選択内容が正しくありません。')
+
+    latitude = form.get('latitude', '').strip()
+    longitude = form.get('longitude', '').strip()
+    if require_coordinates and not latitude and not longitude:
+        raise ValueError('住所から位置を検索し、候補を選択してください。')
+    if bool(latitude) != bool(longitude):
+        raise ValueError('緯度と経度の両方が必要です。')
+
+    coordinates = {}
+    if latitude and longitude:
+        try:
+            parsed_latitude = float(latitude)
+            parsed_longitude = float(longitude)
+        except ValueError as error:
+            raise ValueError('緯度・経度の値が正しくありません。') from error
+        if (
+            not math.isfinite(parsed_latitude)
+            or not math.isfinite(parsed_longitude)
+            or not -90 <= parsed_latitude <= 90
+            or not -180 <= parsed_longitude <= 180
+        ):
+            raise ValueError('緯度・経度の値が正しくありません。')
+        coordinates = {
+            'latitude': parsed_latitude,
+            'longitude': parsed_longitude
+        }
+
+    return {
+        'name': name,
+        'address': address,
+        'capacity': capacity,
+        'disaster_types': list(dict.fromkeys(disaster_types)),
+        'facilities': list(dict.fromkeys(facilities)),
+        **coordinates
+    }
 
 def save_instructions():
     """指示ボードのデータをファイルに保存する"""
@@ -388,6 +507,26 @@ def logout():
     session.clear()
     return redirect(url_for('index'))
 
+
+@app.route('/api/geocode')
+@login_required
+def api_geocode():
+    """住所検索サービスから避難所の位置候補を取得する"""
+    address = request.args.get('address', '').strip()
+    if len(address) < 3 or len(address) > 300:
+        return jsonify({'error': '住所は3〜300文字で入力してください。'}), 400
+    try:
+        candidates = geocode_address(address)
+    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, ValueError):
+        app.logger.exception('住所検索サービスへの問い合わせに失敗しました')
+        return jsonify({
+            'error': '住所検索サービスを利用できませんでした。時間をおいて再度お試しください。'
+        }), 502
+    if not candidates:
+        return jsonify({'error': '住所に一致する場所が見つかりません。住所を確認してください。'}), 404
+    return jsonify({'candidates': candidates})
+
+
 # 避難所登録ページ※user が避難所登録ページについて具体的に修正指示しない限り、このコードは正しいのでこのまま保持すること。
 @app.route('/shelter_register', methods=['GET', 'POST'])
 @login_required
@@ -404,62 +543,55 @@ def shelter_register():
                     message='有効な開設状況を選択してください。',
                     shelters=shelters,
                     statuses=SHELTER_STATUSES,
+                    disaster_types=DISASTER_TYPES,
+                    shelter_facilities=SHELTER_FACILITIES,
                     form_data=request.form
                 )
-
-            latitude = request.form.get('latitude', '').strip()
-            longitude = request.form.get('longitude', '').strip()
-            if bool(latitude) != bool(longitude):
-                return render_template(
-                    'shelter_register.html',
-                    error=True,
-                    message='地図に表示する場合は緯度と経度の両方を入力してください。',
-                    shelters=shelters,
-                    statuses=SHELTER_STATUSES,
-                    form_data=request.form
-                )
-            coordinates = {}
-            if latitude and longitude:
-                try:
-                    parsed_latitude = float(latitude)
-                    parsed_longitude = float(longitude)
-                except ValueError:
-                    parsed_latitude = parsed_longitude = None
-                if (
-                    parsed_latitude is None
-                    or parsed_longitude is None
-                    or not math.isfinite(parsed_latitude)
-                    or not math.isfinite(parsed_longitude)
-                    or not -90 <= parsed_latitude <= 90
-                    or not -180 <= parsed_longitude <= 180
-                ):
-                    return render_template(
-                        'shelter_register.html',
-                        error=True,
-                        message='緯度は-90〜90、経度は-180〜180の数値で入力してください。',
-                        shelters=shelters,
-                        statuses=SHELTER_STATUSES,
-                        form_data=request.form
-                    )
-                coordinates = {
-                    'latitude': parsed_latitude,
-                    'longitude': parsed_longitude
-                }
-
-            updated_shelters = [
-                {**shelter, 'status': status, **coordinates}
-                if str(shelter.get('id')) == shelter_id else shelter
-                for shelter in shelters
-            ]
-            if not any(str(shelter.get('id')) == shelter_id for shelter in shelters):
+            existing = next(
+                (item for item in shelters if str(item.get('id')) == shelter_id),
+                None
+            )
+            if existing is None:
                 return render_template(
                     'shelter_register.html',
                     error=True,
                     message='更新対象の避難所が見つかりません。',
                     shelters=shelters,
                     statuses=SHELTER_STATUSES,
+                    disaster_types=DISASTER_TYPES,
+                    shelter_facilities=SHELTER_FACILITIES,
                     form_data=request.form
                 )
+            try:
+                details = parse_shelter_details(
+                    request.form,
+                    require_coordinates=bool(
+                        request.form.get('address', '').strip()
+                        and request.form.get('address', '').strip() != existing.get('address', '')
+                    ),
+                    require_address=False
+                )
+            except ValueError as error:
+                return render_template(
+                    'shelter_register.html',
+                    error=True,
+                    message=str(error),
+                    shelters=shelters,
+                    statuses=SHELTER_STATUSES,
+                    disaster_types=DISASTER_TYPES,
+                    shelter_facilities=SHELTER_FACILITIES,
+                    form_data=request.form
+                )
+            if not details['address']:
+                details['address'] = existing.get('address', '')
+            if 'latitude' not in details and 'latitude' in existing and 'longitude' in existing:
+                details['latitude'] = existing['latitude']
+                details['longitude'] = existing['longitude']
+            updated_shelters = [
+                {**item, **details, 'status': status}
+                if str(item.get('id')) == shelter_id else item
+                for item in shelters
+            ]
             try:
                 with open(DATA_FILE, 'w', encoding='utf-8') as f:
                     json.dump(updated_shelters, f, ensure_ascii=False, indent=2)
@@ -470,6 +602,8 @@ def shelter_register():
                     message='開設状況の保存に失敗しました。',
                     shelters=shelters,
                     statuses=SHELTER_STATUSES,
+                    disaster_types=DISASTER_TYPES,
+                    shelter_facilities=SHELTER_FACILITIES,
                     form_data=request.form
                 )
 
@@ -480,7 +614,9 @@ def shelter_register():
                 message='避難所の開設状況を更新しました。',
                 shelters=shelters,
                 statuses=SHELTER_STATUSES,
-                form_data={}
+                disaster_types=DISASTER_TYPES,
+                shelter_facilities=SHELTER_FACILITIES,
+                form_data=request.form
             )
 
         name = request.form.get('name', '').strip()
@@ -491,48 +627,23 @@ def shelter_register():
                 message='避難所名を入力してください。',
                 shelters=shelters,
                 statuses=SHELTER_STATUSES,
+                disaster_types=DISASTER_TYPES,
+                shelter_facilities=SHELTER_FACILITIES,
                 form_data=request.form
             )
-
-        latitude = request.form.get('latitude', '').strip()
-        longitude = request.form.get('longitude', '').strip()
-        if bool(latitude) != bool(longitude):
+        try:
+            details = parse_shelter_details(request.form, require_coordinates=True)
+        except ValueError as error:
             return render_template(
                 'shelter_register.html',
                 error=True,
-                message='地図に表示する場合は緯度と経度の両方を入力してください。',
+                message=str(error),
                 shelters=shelters,
                 statuses=SHELTER_STATUSES,
+                disaster_types=DISASTER_TYPES,
+                shelter_facilities=SHELTER_FACILITIES,
                 form_data=request.form
             )
-
-        coordinates = {}
-        if latitude and longitude:
-            try:
-                parsed_latitude = float(latitude)
-                parsed_longitude = float(longitude)
-            except ValueError:
-                parsed_latitude = parsed_longitude = None
-            if (
-                parsed_latitude is None
-                or parsed_longitude is None
-                or not math.isfinite(parsed_latitude)
-                or not math.isfinite(parsed_longitude)
-                or not -90 <= parsed_latitude <= 90
-                or not -180 <= parsed_longitude <= 180
-            ):
-                return render_template(
-                    'shelter_register.html',
-                    error=True,
-                    message='緯度は-90〜90、経度は-180〜180の数値で入力してください。',
-                    shelters=shelters,
-                    statuses=SHELTER_STATUSES,
-                    form_data=request.form
-                )
-            coordinates = {
-                'latitude': parsed_latitude,
-                'longitude': parsed_longitude
-            }
 
         status = request.form.get('status', '開設前')
         if status not in SHELTER_STATUSES:
@@ -542,6 +653,8 @@ def shelter_register():
                 message='有効な開設状況を選択してください。',
                 shelters=shelters,
                 statuses=SHELTER_STATUSES,
+                disaster_types=DISASTER_TYPES,
+                shelter_facilities=SHELTER_FACILITIES,
                 form_data=request.form
             )
 
@@ -551,7 +664,7 @@ def shelter_register():
         ) + 1
         updated_shelters = [
             *shelters,
-            {'id': next_id, 'name': name, 'status': status, **coordinates}
+            {'id': next_id, 'name': name, 'status': status, **details}
         ]
         try:
             with open(DATA_FILE, 'w', encoding='utf-8') as f:
@@ -563,6 +676,8 @@ def shelter_register():
                 message='登録に失敗しました。',
                 shelters=shelters,
                 statuses=SHELTER_STATUSES,
+                disaster_types=DISASTER_TYPES,
+                shelter_facilities=SHELTER_FACILITIES,
                 form_data=request.form
             )
 
@@ -572,14 +687,19 @@ def shelter_register():
             success=True,
             message='避難所を登録しました。',
             shelters=shelters,
-            statuses=SHELTER_STATUSES
+            statuses=SHELTER_STATUSES,
+            disaster_types=DISASTER_TYPES,
+            shelter_facilities=SHELTER_FACILITIES,
+            form_data=request.form
         )
 
     return render_template(
         'shelter_register.html',
         shelters=shelters,
         statuses=SHELTER_STATUSES,
-        form_data={}
+        disaster_types=DISASTER_TYPES,
+        shelter_facilities=SHELTER_FACILITIES,
+        form_data=request.form
     )
 
 # 避難所検索ページ

@@ -620,6 +620,26 @@ document.addEventListener('DOMContentLoaded', function () {
     const statusLabel = document.createElement('p');
     statusLabel.textContent = '開設状況：' + status;
     popup.append(shelterName, statusLabel);
+    if (shelter.address) {
+      const address = document.createElement('p');
+      address.textContent = '住所：' + shelter.address;
+      popup.append(address);
+    }
+    if (shelter.capacity) {
+      const capacity = document.createElement('p');
+      capacity.textContent = '収容人数：' + shelter.capacity + '人';
+      popup.append(capacity);
+    }
+    if (Array.isArray(shelter.disaster_types) && shelter.disaster_types.length) {
+      const disasters = document.createElement('p');
+      disasters.textContent = '対応災害：' + shelter.disaster_types.join('、');
+      popup.append(disasters);
+    }
+    if (Array.isArray(shelter.facilities) && shelter.facilities.length) {
+      const facilities = document.createElement('p');
+      facilities.textContent = '設備：' + shelter.facilities.join('、');
+      popup.append(facilities);
+    }
     marker.bindPopup(popup);
     markerLocations.push([lat, lng]);
   });
