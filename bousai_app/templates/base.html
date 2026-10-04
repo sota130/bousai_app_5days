@@ -4,31 +4,159 @@
   <meta charset="utf-8">
   <title>{% block title %}防災アプリ{% endblock %}</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    :root {
+      --brand-blue: #005ea9;
+      --brand-blue-deep: #003f75;
+      --page-bg: #eef2f5;
+      --card-bg: #f7f8f9;
+      --text: #23364a;
+      --muted: #687b8d;
+      --border: #dfe7ee;
+      --success: #2a9d5d;
+      --success-bg: #eaf9f0;
+      --shadow: 0 8px 18px rgba(24, 52, 74, 0.08);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      background: var(--page-bg);
+      color: var(--text);
+      font-family: "Yu Gothic", "Hiragino Kaku Gothic ProN", "Meiryo", sans-serif;
+    }
+
+    .site-header {
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      height: 72px;
+      padding: 0 28px;
+      background: linear-gradient(90deg, var(--brand-blue) 0%, var(--brand-blue-deep) 100%);
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+    }
+
+    .brand {
+      color: #ffffff;
+      font-size: clamp(1.8rem, 1.3rem + 1vw, 2.4rem);
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      text-decoration: none;
+      line-height: 1;
+    }
+
+    .menu-toggle {
+      width: 42px;
+      height: 42px;
+      border: 1px solid rgba(255, 255, 255, 0.35);
+      border-radius: 10px;
+      background: rgba(255, 255, 255, 0.06);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      padding: 0;
+    }
+
+    .menu-toggle span,
+    .menu-toggle span::before,
+    .menu-toggle span::after {
+      display: block;
+      width: 22px;
+      height: 2px;
+      border-radius: 2px;
+      background: #fff;
+      position: relative;
+      content: "";
+    }
+
+    .menu-toggle span::before { position: absolute; top: -7px; }
+    .menu-toggle span::after { position: absolute; top: 7px; }
+
+    .nav-menu {
+      display: none;
+      position: absolute;
+      right: 20px;
+      top: 82px;
+      min-width: 220px;
+      background: rgba(255, 255, 255, 0.96);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      box-shadow: var(--shadow);
+      padding: 12px 16px;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .nav-menu.open {
+      display: flex;
+    }
+
+    .nav-menu a {
+      color: var(--text);
+      text-decoration: none;
+      padding: 8px 10px;
+      border-radius: 8px;
+      font-size: 0.95rem;
+    }
+
+    .nav-menu a:hover {
+      background: #edf4fb;
+    }
+
+    .nav-menu .status {
+      color: var(--muted);
+      font-size: 0.88rem;
+      padding: 8px 10px 2px;
+      border-top: 1px solid var(--border);
+      margin-top: 4px;
+    }
+
+    main {
+      max-width: 980px;
+      margin: 26px auto 48px;
+      padding: 0 18px;
+    }
+  </style>
 </head>
 <body>
-  <!-- ヘッダー -->
-  <h1>防災アプリ</h1>
+  <header class="site-header">
+    <a href="/" class="brand">防災アプリ</a>
+    <button class="menu-toggle" type="button" aria-label="メニューを開く"><span></span></button>
+  </header>
 
-  <!-- ナビゲーション -->
-  <nav>
-    <a href="/">ホーム</a> |
-    <a href="/shelter_search">避難所検索</a> |
-    <a href="/shelter_register">避難所登録</a> |
+  <nav class="nav-menu" aria-label="メインメニュー">
+    <a href="/">ホーム</a>
+    <a href="/shelter_search">避難所検索</a>
+    <a href="/shelter_register">避難所登録</a>
     <a href="/board">指示・発信ボード</a>
-    ｜
     {% if session.logged_in %}
-      ログイン中{% if session.username %}（{{ session.username }}）{% endif %}
+      <div class="status">ログイン中{% if session.username %}（{{ session.username }}）{% endif %}</div>
       <a href="/logout">ログアウト</a>
     {% else %}
-      未ログイン
+      <div class="status">未ログイン</div>
       <a href="/login">ログイン</a>
     {% endif %}
   </nav>
-  <hr>
 
   <main>
-    <!-- ここに子テンプレートの content が入る -->
     {% block content %}{% endblock %}
   </main>
+
+  <script>
+    document.addEventListener('DOMContentLoaded', function () {
+      const toggle = document.querySelector('.menu-toggle');
+      const nav = document.querySelector('.nav-menu');
+      if (toggle && nav) {
+        toggle.addEventListener('click', function () {
+          nav.classList.toggle('open');
+        });
+      }
+    });
+  </script>
 </body>
 </html>

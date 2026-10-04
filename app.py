@@ -28,8 +28,8 @@ ADMIN_CREDENTIALS = {
 PREFECTURE_CODE = "020000"  # 青森県
 AREA_NAME = "青森市"
 
-# ワークショップ課題：青森市の市区町村コードに変更する
-AREA_CODE = "1420500"
+# 気象庁の警報・注意報JSONで使用される青森市の区域コード
+AREA_CODE = "0220100"
 
 WARNING_URL = (
     f"https://www.jma.go.jp/bosai/warning/data/r8/{PREFECTURE_CODE}.json"
@@ -145,21 +145,19 @@ def filter_shelters(district=None):
 
 
 def parse_area_warnings(warning_data):
-    """気象庁の新形式JSONから対象市区町村の発表・継続中の情報を抽出する"""
+    """気象庁の新形式JSONから対象市区町村の最新状態を抽出する"""
     if not isinstance(warning_data, list):
         raise ValueError("気象庁の警報・注意報データが新形式の配列ではありません")
 
-    warnings = []
-    seen_codes = set()
-    report_datetimes = []
+    latest_area_report = None
 
     for report in warning_data:
         if not isinstance(report, dict):
             continue
 
         report_datetime = report.get("reportDatetime")
-        if isinstance(report_datetime, str) and report_datetime:
-            report_datetimes.append(report_datetime)
+        if not isinstance(report_datetime, str) or not report_datetime:
+            continue
 
         warning = report.get("warning")
         if not isinstance(warning, dict):
@@ -180,31 +178,59 @@ def parse_area_warnings(warning_data):
         if not area:
             continue
 
-        kinds = area.get("kinds", [])
-        if not isinstance(kinds, list):
+        try:
+            parsed_report_datetime = datetime.fromisoformat(
+                report_datetime.replace("Z", "+00:00")
+            )
+        except ValueError:
+            continue
+        if parsed_report_datetime.tzinfo is None:
+            parsed_report_datetime = parsed_report_datetime.replace(tzinfo=JST)
+
+        if (
+            latest_area_report is None
+            or parsed_report_datetime > latest_area_report[0]
+        ):
+            latest_area_report = (
+                parsed_report_datetime,
+                report_datetime,
+                area
+            )
+
+    if latest_area_report is None:
+        raise ValueError("対象市区町村の警報・注意報データが見つかりません")
+
+    _, report_datetime, area = latest_area_report
+    kinds = area.get("kinds", [])
+    if not isinstance(kinds, list):
+        raise ValueError("対象市区町村の警報・注意報データ形式が不正です")
+
+    warnings = []
+    seen_codes = set()
+    for kind in kinds:
+        if not isinstance(kind, dict):
             continue
 
-        for kind in kinds:
-            if not isinstance(kind, dict):
-                continue
+        status = kind.get("status", "")
+        code = kind.get("code", "")
+        if status not in ("発表", "継続") or not code or code in seen_codes:
+            continue
 
-            status = kind.get("status", "")
-            code = kind.get("code", "")
-            if status not in ("発表", "継続") or not code or code in seen_codes:
-                continue
+        name = kind.get("name")
+        if not isinstance(name, str) or not name:
+            name = WARNING_CODES.get(
+                code,
+                f"不明な警報・注意報 (コード: {code})"
+            )
 
-            warnings.append({
-                "name": WARNING_CODES.get(
-                    code,
-                    f"不明な警報・注意報 (コード: {code})"
-                ),
-                "code": code,
-                "status": status
-            })
-            seen_codes.add(code)
+        warnings.append({
+            "name": name,
+            "code": code,
+            "status": status
+        })
+        seen_codes.add(code)
 
-    latest_report_datetime = max(report_datetimes, default="")
-    return warnings, latest_report_datetime
+    return warnings, report_datetime
 
 
 def get_weather_warnings():
@@ -237,7 +263,7 @@ def get_weather_warnings():
 @app.route('/')
 def index():
     resident_notices = [i for i in instructions if i.get('target') == '住民']
-    return render_template('index.html', resident_notices=resident_notices)
+    return render_template('index.html', resident_notices=resident_notices, shelters=shelters)
 
 # ログインページ
 @app.route('/login', methods=['GET', 'POST'])
@@ -278,9 +304,34 @@ def logout():
     return redirect(url_for('index'))
 
 # 避難所登録ページ※user が避難所登録ページについて具体的に修正指示しない限り、このコードは正しいのでこのまま保持すること。
-@app.route('/shelter_register')
+@app.route('/shelter_register', methods=['GET', 'POST'])
 @login_required
 def shelter_register():
+    if request.method == 'POST':
+        name = request.form.get('name', '').strip()
+        if not name:
+            return render_template(
+                'shelter_register.html', error=True, message='避難所名を入力してください。'
+            )
+
+        next_id = max(
+            (shelter.get('id', 0) for shelter in shelters if isinstance(shelter.get('id', 0), int)),
+            default=0
+        ) + 1
+        updated_shelters = [*shelters, {'id': next_id, 'name': name}]
+        try:
+            with open(DATA_FILE, 'w', encoding='utf-8') as f:
+                json.dump(updated_shelters, f, ensure_ascii=False, indent=2)
+        except OSError:
+            return render_template(
+                'shelter_register.html', error=True, message='登録に失敗しました。'
+            )
+
+        shelters[:] = updated_shelters
+        return render_template(
+            'shelter_register.html', success=True, message='避難所を登録しました。'
+        )
+
     return render_template('shelter_register.html')
 
 # 避難所検索ページ
