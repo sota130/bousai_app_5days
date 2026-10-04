@@ -1,23 +1,223 @@
 {% extends "base.html" %}
 
+{% block title %}避難所登録・開設状況 - 防災アプリ{% endblock %}
+
 {% block content %}
-<h2>避難所登録</h2>
-<p>新しい避難所情報を登録します。</p>
+{% set form_data = form_data|default({}) %}
+<style>
+  .shelter-admin {
+    max-width: 760px;
+    margin: 0 auto;
+  }
 
-<!-- 成功・エラーメッセージ表示 -->
-{% if success %}
-  <p>{{ message }}</p>
-{% endif %}
+  .shelter-admin h2,
+  .shelter-admin h3 { color: #18324b; }
 
-{% if error %}
-  <p>{{ message }}</p>
-{% endif %}
+  .shelter-form,
+  .shelter-status-list {
+    margin: 20px 0;
+    padding: 20px;
+    border: 1px solid #dfe7ee;
+    border-radius: 16px;
+    background: #fff;
+    box-shadow: 0 7px 20px rgba(24, 52, 74, 0.055);
+  }
 
-<form method="POST">
-  <p>
-    <label for="name">避難所名（必須）</label><br>
-    <input type="text" id="name" name="name">
-  </p>
-  <p><button type="submit">登録</button></p>
-</form>
+  .shelter-form label,
+  .status-form label {
+    display: block;
+    margin-bottom: 6px;
+    color: #23364a;
+    font-weight: 700;
+  }
+
+  .shelter-form input,
+  .shelter-form select,
+  .status-form select {
+    min-height: 42px;
+    padding: 8px 10px;
+    border: 1px solid #bfccd6;
+    border-radius: 8px;
+    font: inherit;
+  }
+
+  .shelter-form input { width: 100%; }
+  .shelter-form select,
+  .status-form select { width: 100%; }
+
+  .registration-fields {
+    display: grid;
+    grid-template-columns: minmax(0, 1.3fr) minmax(180px, 0.7fr);
+    gap: 16px;
+  }
+
+  .coordinate-fields {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+  }
+
+  .form-field { margin: 16px 0; }
+  .registration-fields .form-field { min-width: 0; }
+
+  .form-help {
+    margin: 6px 0 0;
+    color: #64798b;
+    font-size: 0.84rem;
+    line-height: 1.6;
+  }
+
+  .primary-button {
+    min-height: 42px;
+    padding: 9px 18px;
+    border: 0;
+    border-radius: 9px;
+    background: #1267a8;
+    color: #fff;
+    font: inherit;
+    font-weight: 700;
+    cursor: pointer;
+  }
+
+  .feedback {
+    padding: 12px 14px;
+    border-radius: 9px;
+    line-height: 1.6;
+  }
+
+  .feedback.success { background: #eaf9f0; color: #21643e; }
+  .feedback.error { background: #fff0ed; color: #8f321c; }
+
+  .shelter-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 10px;
+    padding: 18px 0;
+    border-bottom: 1px solid #e1e9ef;
+  }
+
+  .shelter-row:last-child { border-bottom: 0; }
+  .shelter-name { margin: 0; font-weight: 700; }
+  .shelter-location {
+    margin: 4px 0 0;
+    color: #64798b;
+    font-size: 0.82rem;
+  }
+
+  .status-form {
+    grid-template-columns: minmax(130px, 0.65fr) minmax(220px, 1.35fr) auto;
+    align-items: end;
+    gap: 12px;
+  }
+
+  .status-form > div:first-of-type,
+  .status-coordinates,
+  .status-form .primary-button {
+    min-width: 0;
+  }
+
+  .status-coordinates {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+  }
+
+  .status-coordinates input { width: 100%; min-width: 0; }
+
+  .status-form .primary-button { justify-self: start; }
+
+  @media (max-width: 560px) {
+    .shelter-form,
+    .shelter-status-list { padding: 16px; }
+    .registration-fields,
+    .status-form { grid-template-columns: minmax(0, 1fr); }
+    .status-form .primary-button { width: 100%; }
+  }
+</style>
+
+<div class="shelter-admin">
+  <h2>避難所登録・開設状況</h2>
+  <p>避難所の名称、地図上の位置、現在の開設状況を登録・更新できます。</p>
+
+  {% if success %}
+    <p class="feedback success" role="status">{{ message }}</p>
+  {% endif %}
+  {% if error %}
+    <p class="feedback error" role="alert">{{ message }}</p>
+  {% endif %}
+
+  <form class="shelter-form" method="post">
+    <input type="hidden" name="action" value="register">
+    <div class="registration-fields">
+      <div class="form-field">
+        <label for="name">避難所名（必須）</label>
+        <input type="text" id="name" name="name" value="{{ form_data.get('name', '') }}" required>
+      </div>
+      <div class="form-field">
+        <label for="status">開設状況</label>
+        <select id="status" name="status">
+          {% for status in statuses %}
+            <option value="{{ status }}" {% if form_data.get('status', '開設前') == status %}selected{% endif %}>{{ status }}</option>
+          {% endfor %}
+        </select>
+      </div>
+    </div>
+    <div class="coordinate-fields">
+      <div class="form-field">
+        <label for="latitude">緯度（任意）</label>
+        <input type="number" id="latitude" name="latitude" min="-90" max="90" step="any" value="{{ form_data.get('latitude', '') }}" placeholder="例：40.8244">
+      </div>
+      <div class="form-field">
+        <label for="longitude">経度（任意）</label>
+        <input type="number" id="longitude" name="longitude" min="-180" max="180" step="any" value="{{ form_data.get('longitude', '') }}" placeholder="例：140.7400">
+      </div>
+    </div>
+    <p class="form-help">地図に避難所を表示するには、正確な緯度・経度を両方入力してください。未入力の場合、地図にピンは表示されません。</p>
+    <p><button class="primary-button" type="submit">避難所を登録</button></p>
+  </form>
+
+  <section class="shelter-status-list" aria-labelledby="shelter-status-title">
+    <h3 id="shelter-status-title">登録済み避難所の開設状況</h3>
+    <p class="form-help">開設状況と正確な位置を設定すると、ホーム画面の避難所マップに反映されます。位置情報が未登録の場合は、緯度・経度を両方入力してください。</p>
+    {% if shelters %}
+      {% for shelter in shelters %}
+        <div class="shelter-row">
+          <div>
+            <p class="shelter-name">{{ shelter.name }}</p>
+            {% if shelter.latitude is defined and shelter.longitude is defined %}
+              <p class="shelter-location">位置情報登録済み</p>
+            {% else %}
+              <p class="shelter-location">位置情報未登録</p>
+            {% endif %}
+          </div>
+          <form class="status-form" method="post">
+            <input type="hidden" name="action" value="update_status">
+            <input type="hidden" name="shelter_id" value="{{ shelter.id }}">
+            <div>
+              <label for="status-{{ shelter.id }}">開設状況</label>
+              <select id="status-{{ shelter.id }}" name="status">
+                {% for status in statuses %}
+                  <option value="{{ status }}" {% if shelter.status|default('状況未登録') == status %}selected{% endif %}>{{ status }}</option>
+                {% endfor %}
+              </select>
+            </div>
+            <div class="status-coordinates">
+              <div>
+                <label for="latitude-{{ shelter.id }}">緯度</label>
+                <input type="number" id="latitude-{{ shelter.id }}" name="latitude" min="-90" max="90" step="any" value="{{ shelter.latitude|default('') }}">
+              </div>
+              <div>
+                <label for="longitude-{{ shelter.id }}">経度</label>
+                <input type="number" id="longitude-{{ shelter.id }}" name="longitude" min="-180" max="180" step="any" value="{{ shelter.longitude|default('') }}">
+              </div>
+            </div>
+            <button class="primary-button" type="submit">状況・位置を更新</button>
+          </form>
+        </div>
+      {% endfor %}
+    {% else %}
+      <p class="form-help">登録済み避難所はありません。</p>
+    {% endif %}
+  </section>
+</div>
 {% endblock %}

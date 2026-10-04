@@ -3,23 +3,143 @@
 {% block title %}指示・発信ボード - 防災アプリ{% endblock %}
 
 {% block content %}
-<h2>発信ボード</h2>
-<p>住民向けの発信を登録・確認できます。</p>
+<style>
+  .board-page { max-width: 820px; margin: 0 auto; }
+  .board-card {
+    margin: 20px 0;
+    padding: 20px;
+    border: 1px solid #dfe7ee;
+    border-radius: 16px;
+    background: #fff;
+    box-shadow: 0 7px 20px rgba(24, 52, 74, 0.055);
+  }
+  .board-card h2,
+  .board-card h3 { margin-top: 0; color: #18324b; }
+  .board-form label,
+  .status-form label { display: block; margin-bottom: 6px; font-weight: 700; }
+  .board-form input,
+  .board-form select,
+  .board-form textarea,
+  .status-form select {
+    width: 100%;
+    min-height: 42px;
+    padding: 8px 10px;
+    border: 1px solid #bfccd6;
+    border-radius: 8px;
+    font: inherit;
+  }
+  .board-form textarea { min-height: 100px; resize: vertical; }
+  .form-field { margin: 16px 0; }
+  .board-button {
+    min-height: 40px;
+    padding: 8px 16px;
+    border: 0;
+    border-radius: 8px;
+    background: #1267a8;
+    color: #fff;
+    font: inherit;
+    font-weight: 700;
+    cursor: pointer;
+  }
+  .board-button.danger { background: #a53b22; }
+  .feedback { padding: 12px 14px; border-radius: 9px; }
+  .feedback.success { background: #eaf9f0; color: #21643e; }
+  .feedback.error { background: #fff0ed; color: #8f321c; }
+  .instruction {
+    padding: 16px 0;
+    border-bottom: 1px solid #e1e9ef;
+  }
+  .instruction:last-child { border-bottom: 0; }
+  .instruction.is-urgent { margin: 0 -10px; padding: 14px 10px; border-radius: 10px; background: #fff2ed; }
+  .instruction-main { display: flex; justify-content: space-between; gap: 12px; }
+  .instruction-content { margin: 0; font-weight: 700; line-height: 1.55; }
+  .priority-label {
+    display: inline-block;
+    margin-top: 7px;
+    padding: 3px 8px;
+    border-radius: 999px;
+    background: #edf3f7;
+    color: #526b7e;
+    font-size: 0.75rem;
+    font-weight: 700;
+  }
+  .priority-label.is-high { background: #a53b22; color: #fff; }
+  .instruction-meta { margin: 7px 0 0; color: #64798b; font-size: 0.8rem; }
+  .status-form { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 10px; margin-top: 12px; }
+  .status-form label { font-size: 0.83rem; }
+  @media (max-width: 560px) {
+    .board-card { padding: 16px; }
+    .instruction-main { flex-direction: column; }
+    .status-form { grid-template-columns: 1fr; }
+  }
+</style>
 
-<!-- 発信一覧 -->
-<h3>発信一覧</h3>
-{% if instructions %}
-<table border="1" cellpadding="5">
-  <tr>
-    <th>内容</th>
-  </tr>
-  {% for inst in instructions %}
-  <tr>
-    <td>{{ inst.content }}{% if inst.shelter %}（避難先: {{ inst.shelter }}）{% endif %}</td>
-  </tr>
-  {% endfor %}
-</table>
-{% else %}
-<p>登録されている指示はありません。</p>
-{% endif %}
+<div class="board-page">
+  <h2>指示・発信ボード</h2>
+  <p>住民向けの指示を登録すると、ホーム画面にも発信状況が反映されます。</p>
+
+  {% if success %}
+    <p class="feedback success" role="status">{{ message }}</p>
+  {% endif %}
+  {% if error %}
+    <p class="feedback error" role="alert">{{ message }}</p>
+  {% endif %}
+
+  <section class="board-card" aria-labelledby="new-instruction-title">
+    <h3 id="new-instruction-title">住民向け指示を登録</h3>
+    <form class="board-form" method="post">
+      <input type="hidden" name="action" value="register">
+      <div class="form-field">
+        <label for="content">指示内容</label>
+        <textarea id="content" name="content" required>{{ form_data.get('content', '') }}</textarea>
+      </div>
+      <div class="form-field">
+        <label for="shelter">避難先（任意）</label>
+        <input type="text" id="shelter" name="shelter" value="{{ form_data.get('shelter', '') }}">
+      </div>
+      <div class="form-field">
+        <label for="priority">緊急度</label>
+        <select id="priority" name="priority">
+          <option value="通常" {% if form_data.get('priority', '通常') == '通常' %}selected{% endif %}>通常</option>
+          <option value="高" {% if form_data.get('priority') == '高' %}selected{% endif %}>高（ホーム画面で赤色表示）</option>
+        </select>
+      </div>
+      <button class="board-button" type="submit">指示を発信</button>
+    </form>
+  </section>
+
+  <section class="board-card" aria-labelledby="instruction-list-title">
+    <h3 id="instruction-list-title">住民向け発信一覧</h3>
+    {% if instructions %}
+      {% for inst in instructions %}
+        {% set active = inst.status|default('発信中') not in ['解除', '完了', '終了', '対応済み'] %}
+        {% set high_priority = inst.priority|default('通常') == '高' %}
+        <article class="instruction{% if active and high_priority %} is-urgent{% endif %}">
+          <div class="instruction-main">
+            <div>
+              <p class="instruction-content">{{ inst.content }}</p>
+              {% if inst.shelter %}<p class="instruction-meta">避難先：{{ inst.shelter }}</p>{% endif %}
+              <span class="priority-label{% if active and high_priority %} is-high{% endif %}">{% if high_priority %}緊急度：高{% else %}通常{% endif %}</span>
+              <p class="instruction-meta">発信日時：{{ inst.created_at or '不明' }} ／ 状況：{{ inst.status|default('発信中') }}</p>
+            </div>
+          </div>
+          <form class="status-form" method="post">
+            <input type="hidden" name="action" value="update_status">
+            <input type="hidden" name="instruction_id" value="{{ inst.id }}">
+            <div>
+              <label for="instruction-status-{{ inst.id }}">発信状況</label>
+              <select id="instruction-status-{{ inst.id }}" name="status">
+                <option value="発信中" {% if active %}selected{% endif %}>発信中</option>
+                <option value="解除" {% if not active %}selected{% endif %}>解除</option>
+              </select>
+            </div>
+            <button class="board-button{% if active %} danger{% endif %}" type="submit">状況を更新</button>
+          </form>
+        </article>
+      {% endfor %}
+    {% else %}
+      <p>登録されている住民向け指示はありません。</p>
+    {% endif %}
+  </section>
+</div>
 {% endblock %}

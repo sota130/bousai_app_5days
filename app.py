@@ -2,6 +2,7 @@ from flask import Flask, jsonify, request, render_template, session, redirect, u
 from urllib.parse import urlparse, urljoin
 from functools import wraps
 import json
+import math
 import os
 import urllib.request
 from datetime import datetime, timedelta, timezone
@@ -36,6 +37,7 @@ WARNING_URL = (
 )
 
 JST = timezone(timedelta(hours=9))
+SHELTER_STATUSES = ("開設中", "開設前", "閉鎖", "状況未登録")
 
 # 警報・注意報のコード一覧
 WARNING_CODES = {
@@ -259,10 +261,93 @@ def get_weather_warnings():
         }
 
 
+def parse_disaster_time(value):
+    """災害情報の日時を比較用の datetime に変換する"""
+    if not isinstance(value, str) or not value:
+        return datetime.min.replace(tzinfo=JST)
+    try:
+        return datetime.strptime(value, "%Y年%m月%d日 %H:%M").replace(tzinfo=JST)
+    except ValueError:
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            return parsed if parsed.tzinfo else parsed.replace(tzinfo=JST)
+        except ValueError:
+            return datetime.min.replace(tzinfo=JST)
+
+
+def get_disaster_information():
+    """気象警報と住民向け発信を日時順の災害情報一覧にする"""
+    weather = get_weather_warnings()
+    latest_instructions = load_json(INSTRUCTIONS_FILE, [])
+    items = []
+
+    for warning in weather.get("warnings", []):
+        items.append({
+            "category": "weather",
+            "category_name": "気象情報",
+            "icon": "🌦️",
+            "title": warning.get("name", "気象警報・注意報"),
+            "status": warning.get("status", ""),
+            "timestamp": weather.get("report_time", "不明"),
+            "active": True,
+            "urgent": True,
+            "detail": f"{weather.get('area_name', AREA_NAME)}に発表された気象庁の情報です。",
+            "_sort_time": parse_disaster_time(weather.get("report_time"))
+        })
+
+    if isinstance(latest_instructions, list):
+        for notice in latest_instructions:
+            if not isinstance(notice, dict) or notice.get("target") != "住民":
+                continue
+            content = notice.get("content")
+            content = content if isinstance(content, str) else ""
+            shelter = notice.get("shelter")
+            shelter = shelter if isinstance(shelter, str) else ""
+            category = (
+                "evacuation"
+                if shelter or "避難" in content
+                else "notice"
+            )
+            timestamp = notice.get("created_at") or notice.get("updated_at") or "不明"
+            status = notice.get("status") or "発信中"
+            priority = notice.get("priority") or "通常"
+            active = status not in ("解除", "完了", "終了", "対応済み")
+            items.append({
+                "category": category,
+                "category_name": "避難情報" if category == "evacuation" else "お知らせ",
+                "icon": "🚨" if category == "evacuation" else "📢",
+                "title": content or "住民向けのお知らせ",
+                "status": status,
+                "timestamp": timestamp,
+                "priority": priority,
+                "active": active,
+                "urgent": active and priority == "高",
+                "shelter": shelter,
+                "detail": notice.get("detail") or notice.get("description") or content,
+                "_sort_time": parse_disaster_time(timestamp)
+            })
+
+    items.sort(key=lambda item: item["_sort_time"], reverse=True)
+    for item in items:
+        del item["_sort_time"]
+
+    return {
+        "items": items,
+        "updated_at": get_japan_time(),
+        "weather_error": bool(weather.get("error"))
+    }
+
+
 # トップページ：templates/index.html を返す（住民向け指示も表示する）
 @app.route('/')
 def index():
-    resident_notices = [i for i in instructions if i.get('target') == '住民']
+    current_instructions = load_json(INSTRUCTIONS_FILE, instructions)
+    if isinstance(current_instructions, list):
+        instructions[:] = current_instructions
+    resident_notices = [
+        item for item in instructions
+        if isinstance(item, dict) and item.get('target') == '住民'
+    ]
     return render_template('index.html', resident_notices=resident_notices, shelters=shelters)
 
 # ログインページ
@@ -308,31 +393,194 @@ def logout():
 @login_required
 def shelter_register():
     if request.method == 'POST':
+        action = request.form.get('action', 'register')
+        if action == 'update_status':
+            shelter_id = request.form.get('shelter_id', '')
+            status = request.form.get('status', '')
+            if status not in SHELTER_STATUSES:
+                return render_template(
+                    'shelter_register.html',
+                    error=True,
+                    message='有効な開設状況を選択してください。',
+                    shelters=shelters,
+                    statuses=SHELTER_STATUSES,
+                    form_data=request.form
+                )
+
+            latitude = request.form.get('latitude', '').strip()
+            longitude = request.form.get('longitude', '').strip()
+            if bool(latitude) != bool(longitude):
+                return render_template(
+                    'shelter_register.html',
+                    error=True,
+                    message='地図に表示する場合は緯度と経度の両方を入力してください。',
+                    shelters=shelters,
+                    statuses=SHELTER_STATUSES,
+                    form_data=request.form
+                )
+            coordinates = {}
+            if latitude and longitude:
+                try:
+                    parsed_latitude = float(latitude)
+                    parsed_longitude = float(longitude)
+                except ValueError:
+                    parsed_latitude = parsed_longitude = None
+                if (
+                    parsed_latitude is None
+                    or parsed_longitude is None
+                    or not math.isfinite(parsed_latitude)
+                    or not math.isfinite(parsed_longitude)
+                    or not -90 <= parsed_latitude <= 90
+                    or not -180 <= parsed_longitude <= 180
+                ):
+                    return render_template(
+                        'shelter_register.html',
+                        error=True,
+                        message='緯度は-90〜90、経度は-180〜180の数値で入力してください。',
+                        shelters=shelters,
+                        statuses=SHELTER_STATUSES,
+                        form_data=request.form
+                    )
+                coordinates = {
+                    'latitude': parsed_latitude,
+                    'longitude': parsed_longitude
+                }
+
+            updated_shelters = [
+                {**shelter, 'status': status, **coordinates}
+                if str(shelter.get('id')) == shelter_id else shelter
+                for shelter in shelters
+            ]
+            if not any(str(shelter.get('id')) == shelter_id for shelter in shelters):
+                return render_template(
+                    'shelter_register.html',
+                    error=True,
+                    message='更新対象の避難所が見つかりません。',
+                    shelters=shelters,
+                    statuses=SHELTER_STATUSES,
+                    form_data=request.form
+                )
+            try:
+                with open(DATA_FILE, 'w', encoding='utf-8') as f:
+                    json.dump(updated_shelters, f, ensure_ascii=False, indent=2)
+            except OSError:
+                return render_template(
+                    'shelter_register.html',
+                    error=True,
+                    message='開設状況の保存に失敗しました。',
+                    shelters=shelters,
+                    statuses=SHELTER_STATUSES,
+                    form_data=request.form
+                )
+
+            shelters[:] = updated_shelters
+            return render_template(
+                'shelter_register.html',
+                success=True,
+                message='避難所の開設状況を更新しました。',
+                shelters=shelters,
+                statuses=SHELTER_STATUSES,
+                form_data={}
+            )
+
         name = request.form.get('name', '').strip()
         if not name:
             return render_template(
-                'shelter_register.html', error=True, message='避難所名を入力してください。'
+                'shelter_register.html',
+                error=True,
+                message='避難所名を入力してください。',
+                shelters=shelters,
+                statuses=SHELTER_STATUSES,
+                form_data=request.form
+            )
+
+        latitude = request.form.get('latitude', '').strip()
+        longitude = request.form.get('longitude', '').strip()
+        if bool(latitude) != bool(longitude):
+            return render_template(
+                'shelter_register.html',
+                error=True,
+                message='地図に表示する場合は緯度と経度の両方を入力してください。',
+                shelters=shelters,
+                statuses=SHELTER_STATUSES,
+                form_data=request.form
+            )
+
+        coordinates = {}
+        if latitude and longitude:
+            try:
+                parsed_latitude = float(latitude)
+                parsed_longitude = float(longitude)
+            except ValueError:
+                parsed_latitude = parsed_longitude = None
+            if (
+                parsed_latitude is None
+                or parsed_longitude is None
+                or not math.isfinite(parsed_latitude)
+                or not math.isfinite(parsed_longitude)
+                or not -90 <= parsed_latitude <= 90
+                or not -180 <= parsed_longitude <= 180
+            ):
+                return render_template(
+                    'shelter_register.html',
+                    error=True,
+                    message='緯度は-90〜90、経度は-180〜180の数値で入力してください。',
+                    shelters=shelters,
+                    statuses=SHELTER_STATUSES,
+                    form_data=request.form
+                )
+            coordinates = {
+                'latitude': parsed_latitude,
+                'longitude': parsed_longitude
+            }
+
+        status = request.form.get('status', '開設前')
+        if status not in SHELTER_STATUSES:
+            return render_template(
+                'shelter_register.html',
+                error=True,
+                message='有効な開設状況を選択してください。',
+                shelters=shelters,
+                statuses=SHELTER_STATUSES,
+                form_data=request.form
             )
 
         next_id = max(
             (shelter.get('id', 0) for shelter in shelters if isinstance(shelter.get('id', 0), int)),
             default=0
         ) + 1
-        updated_shelters = [*shelters, {'id': next_id, 'name': name}]
+        updated_shelters = [
+            *shelters,
+            {'id': next_id, 'name': name, 'status': status, **coordinates}
+        ]
         try:
             with open(DATA_FILE, 'w', encoding='utf-8') as f:
                 json.dump(updated_shelters, f, ensure_ascii=False, indent=2)
         except OSError:
             return render_template(
-                'shelter_register.html', error=True, message='登録に失敗しました。'
+                'shelter_register.html',
+                error=True,
+                message='登録に失敗しました。',
+                shelters=shelters,
+                statuses=SHELTER_STATUSES,
+                form_data=request.form
             )
 
         shelters[:] = updated_shelters
         return render_template(
-            'shelter_register.html', success=True, message='避難所を登録しました。'
+            'shelter_register.html',
+            success=True,
+            message='避難所を登録しました。',
+            shelters=shelters,
+            statuses=SHELTER_STATUSES
         )
 
-    return render_template('shelter_register.html')
+    return render_template(
+        'shelter_register.html',
+        shelters=shelters,
+        statuses=SHELTER_STATUSES,
+        form_data={}
+    )
 
 # 避難所検索ページ
 @app.route('/shelter_search')
@@ -346,11 +594,123 @@ def all_shelters():
 
 
 # 指示ボード：住民向けの指示を一覧で確認する
-@app.route('/board')
+@app.route('/board', methods=['GET', 'POST'])
 @login_required
 def board():
-    resident_instructions = [i for i in instructions if i.get('target') == '住民']
-    return render_template('board.html', instructions=resident_instructions)
+    current_instructions = load_json(INSTRUCTIONS_FILE, instructions)
+    if isinstance(current_instructions, list):
+        instructions[:] = current_instructions
+
+    def resident_instructions():
+        return [
+            item for item in instructions
+            if isinstance(item, dict) and item.get('target') == '住民'
+        ]
+
+    if request.method == 'POST':
+        action = request.form.get('action', 'register')
+        if action == 'update_status':
+            instruction_id = request.form.get('instruction_id', '')
+            status = request.form.get('status', '')
+            if status not in ('発信中', '解除'):
+                return render_template(
+                    'board.html',
+                    instructions=resident_instructions(),
+                    error=True,
+                    message='有効な発信状況を選択してください。',
+                    form_data=request.form
+                )
+
+            if not any(
+                str(item.get('id')) == instruction_id and item.get('target') == '住民'
+                for item in instructions if isinstance(item, dict)
+            ):
+                return render_template(
+                    'board.html',
+                    instructions=resident_instructions(),
+                    error=True,
+                    message='更新対象の住民向け指示が見つかりません。',
+                    form_data=request.form
+                )
+            updated_instructions = [
+                {**item, 'status': status, 'updated_at': get_japan_time()}
+                if isinstance(item, dict)
+                and str(item.get('id')) == instruction_id
+                and item.get('target') == '住民'
+                else item
+                for item in instructions
+            ]
+            success_message = '発信状況を更新しました。'
+        else:
+            content = request.form.get('content', '').strip()
+            shelter = request.form.get('shelter', '').strip()
+            priority = request.form.get('priority', '通常')
+            if not content:
+                return render_template(
+                    'board.html',
+                    instructions=resident_instructions(),
+                    error=True,
+                    message='指示内容を入力してください。',
+                    form_data=request.form
+                )
+            if priority not in ('通常', '高'):
+                return render_template(
+                    'board.html',
+                    instructions=resident_instructions(),
+                    error=True,
+                    message='有効な緊急度を選択してください。',
+                    form_data=request.form
+                )
+            now = get_japan_time()
+            next_id = max(
+                (
+                    item.get('id', 0)
+                    for item in instructions
+                    if isinstance(item, dict) and isinstance(item.get('id', 0), int)
+                ),
+                default=0
+            ) + 1
+            updated_instructions = [
+                *instructions,
+                {
+                    'id': next_id,
+                    'target': '住民',
+                    'content': content,
+                    'shelter': shelter,
+                    'status': '発信中',
+                    'priority': priority,
+                    'created_at': now,
+                    'updated_at': now
+                }
+            ]
+            success_message = '住民向け指示を登録しました。ホーム画面にも反映されます。'
+
+        try:
+            with open(INSTRUCTIONS_FILE, 'w', encoding='utf-8') as f:
+                json.dump(updated_instructions, f, ensure_ascii=False, indent=2)
+        except OSError:
+            return render_template(
+                'board.html',
+                instructions=resident_instructions(),
+                error=True,
+                message='指示の保存に失敗しました。',
+                form_data=request.form
+            )
+
+        instructions[:] = updated_instructions
+        return render_template(
+            'board.html',
+            instructions=resident_instructions(),
+            success=True,
+            message=success_message,
+            form_data={}
+        )
+
+    return render_template(
+        'board.html',
+        instructions=resident_instructions(),
+        form_data={}
+    )
 
 # 検索結果ページ：templates/search_results.html を返す
 @app.route('/search_results')
@@ -375,6 +735,13 @@ def get_shelters():
 def api_weather_warnings():
     """気象警報・注意報をJSON形式で返すAPI"""
     return jsonify(get_weather_warnings())
+
+
+@app.route('/api/disaster_information')
+def api_disaster_information():
+    """気象情報と住民向け発信をまとめた災害情報一覧を返す"""
+    return jsonify(get_disaster_information())
+
 
 if __name__ == '__main__':
     app.run(debug=True, port=5000)

@@ -108,6 +108,12 @@
       background: #edf4fb;
     }
 
+    .nav-menu a[aria-current="page"] {
+      background: #e5f2fc;
+      color: var(--brand-blue-deep);
+      font-weight: 700;
+    }
+
     .nav-menu .status {
       color: var(--muted);
       font-size: 0.88rem;
@@ -126,14 +132,14 @@
 <body>
   <header class="site-header">
     <a href="/" class="brand">防災アプリ</a>
-    <button class="menu-toggle" type="button" aria-label="メニューを開く"><span></span></button>
+    <button class="menu-toggle" type="button" aria-label="メニューを開く" aria-controls="main-menu" aria-expanded="false"><span></span></button>
   </header>
 
-  <nav class="nav-menu" aria-label="メインメニュー">
-    <a href="/">ホーム</a>
-    <a href="/shelter_search">避難所検索</a>
-    <a href="/shelter_register">避難所登録</a>
-    <a href="/board">指示・発信ボード</a>
+  <nav class="nav-menu" id="main-menu" aria-label="メインメニュー">
+    <a href="/" {% if request.path == '/' %}aria-current="page"{% endif %}>ホーム</a>
+    <a href="/shelter_search" {% if request.path == '/shelter_search' or request.path in ['/all_shelters', '/search_results'] %}aria-current="page"{% endif %}>避難所検索</a>
+    <a href="/shelter_register" {% if request.path == '/shelter_register' %}aria-current="page"{% endif %}>避難所登録</a>
+    <a href="/board" {% if request.path == '/board' %}aria-current="page"{% endif %}>指示・発信ボード</a>
     {% if session.logged_in %}
       <div class="status">ログイン中{% if session.username %}（{{ session.username }}）{% endif %}</div>
       <a href="/logout">ログアウト</a>
@@ -153,7 +159,9 @@
       const nav = document.querySelector('.nav-menu');
       if (toggle && nav) {
         toggle.addEventListener('click', function () {
-          nav.classList.toggle('open');
+          const isOpen = nav.classList.toggle('open');
+          toggle.setAttribute('aria-expanded', String(isOpen));
+          toggle.setAttribute('aria-label', isOpen ? 'メニューを閉じる' : 'メニューを開く');
         });
       }
     });
